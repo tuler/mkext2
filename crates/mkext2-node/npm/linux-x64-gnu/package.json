@@ -1,0 +1,42 @@
+{
+  "name": "@tuler/mkext2-linux-x64-gnu",
+  "version": "0.1.0",
+  "cpu": [
+    "x64"
+  ],
+  "main": "mkext2.linux-x64-gnu.node",
+  "files": [
+    "mkext2.linux-x64-gnu.node"
+  ],
+  "description": "mkext2 native binding for linux-x64-gnu",
+  "keywords": [
+    "ext2",
+    "filesystem",
+    "image",
+    "genext2fs",
+    "reproducible",
+    "cartesi"
+  ],
+  "homepage": "https://github.com/tuler/mkext2",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">= 18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tuler/mkext2.git",
+    "directory": "crates/mkext2-node"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "os": [
+    "linux"
+  ],
+  "libc": [
+    "glibc"
+  ],
+  "scripts": {
+    "prepublishOnly": "node -e \"require('fs').accessSync('mkext2.linux-x64-gnu.node')\""
+  }
+}

@@ -1,0 +1,8 @@
+/target
+node_modules/
+*.node
+*.img
+*.ext2
+/bench-work/
+crates/mkext2-node/npm/*/*.node
+dist/

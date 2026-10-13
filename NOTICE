@@ -1,0 +1,18 @@
+mkext2
+Copyright 2026 Danilo Tuler
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+mkext2 produces images compatible with those of genext2fs / xgenext2fs, but
+contains no code from them. Compatibility was obtained by a clean-room
+process: the image generation engine was written from a behavioral
+specification (docs/SPEC.md), and verified against the xgenext2fs program as
+a black box. See CLEANROOM.md.
+
+The tar reader (crates/mkext2/src/source/tar.rs) reproduces the behavior of
+libarchive's tar format reader (https://www.libarchive.org, BSD 2-Clause
+License, Copyright (c) Tim Kientzle and contributors).
+
+The internal hash function implements the FxHash algorithm, as in the
+rustc-hash crate (https://github.com/rust-lang/rustc-hash, MIT or
+Apache-2.0).

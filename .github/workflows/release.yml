@@ -1,0 +1,176 @@
+# Release automation with Sampo (https://github.com/bruits/sampo).
+#
+# On every push to main, Sampo either opens/refreshes the release PR (when
+# there are pending changesets in .sampo/changesets) or, once that PR is
+# merged, publishes:
+#   - the `mkext2` crate to crates.io,
+#   - `@tuler/mkext2` and its per-platform binary packages to npm,
+# then tags the versions and creates GitHub releases.
+#
+# Publishing uses OIDC trusted publishing only: no registry tokens are
+# stored in the repository. The registries trust this workflow file
+# (release.yml) running in the `release` environment, which only the main
+# branch can deploy to. Only the `release` job can request OIDC tokens; it
+# runs no code from unpinned third-party actions.
+#
+# Publishing is disabled until the repository variable PUBLISH_ENABLED is
+# "true" (see RELEASING.md for the first, manual release). Running the
+# workflow manually (workflow_dispatch) only builds the native binaries.
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  NAPI_CLI: "@napi-rs/cli@3.10.8"
+  SAMPO_GITHUB_ACTION: "0.20.0"
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      publish: ${{ steps.plan.outputs.publish }}
+      build: ${{ steps.plan.outputs.build }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: plan
+        run: |
+          version=$(node -p "require('./crates/mkext2-node/package.json').version")
+          publish=false
+          # A release is due when no changesets are pending (the release PR
+          # was merged) and the version is not on npm yet.
+          if ! ls .sampo/changesets/*.md >/dev/null 2>&1 \
+            && [ -z "$(npm view "@tuler/mkext2@${version}" version 2>/dev/null || true)" ]; then
+            publish=true
+          fi
+          build=$publish
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then build=true; fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "publish=${publish}" >> "$GITHUB_OUTPUT"
+          echo "build=${build}" >> "$GITHUB_OUTPUT"
+          echo "version ${version}: publish=${publish} build=${build}"
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { os: macos-latest, target: aarch64-apple-darwin, platform: darwin-arm64, smoke: true }
+          - { os: macos-latest, target: x86_64-apple-darwin, platform: darwin-x64 }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, platform: linux-x64-gnu, cross: --use-napi-cross, smoke: true }
+          - { os: ubuntu-latest, target: aarch64-unknown-linux-gnu, platform: linux-arm64-gnu, cross: --use-napi-cross }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, platform: win32-x64-msvc, smoke: true }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: crates/mkext2-node
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - run: rustup target add ${{ matrix.target }}
+      - name: Build native binding
+        run: npx -y -p "$NAPI_CLI" napi build --platform --release --target ${{ matrix.target }} ${{ matrix.cross }}
+      - name: Check glibc requirement
+        if: contains(matrix.target, 'linux-gnu')
+        run: |
+          need=$(objdump -T mkext2.${{ matrix.platform }}.node | grep -o 'GLIBC_[0-9.]*' | sort -V | tail -n 1)
+          echo "requires ${need}"
+          [ "$(printf '%s\nGLIBC_2.17\n' "$need" | sort -V | tail -n 1)" = "GLIBC_2.17" ]
+      - name: Smoke test
+        if: matrix.smoke
+        run: node -e "const m = require('./index.js'); console.log('mkext2', m.version())"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: binding-${{ matrix.platform }}
+          path: crates/mkext2-node/mkext2.${{ matrix.platform }}.node
+          if-no-files-found: error
+      # the generated loader embeds the package version: publish this one
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: matrix.platform == 'linux-x64-gnu'
+        with:
+          name: js-binding
+          path: |
+            crates/mkext2-node/index.js
+            crates/mkext2-node/index.d.ts
+          if-no-files-found: error
+
+  release:
+    needs: [plan, build]
+    if: >-
+      always()
+      && github.event_name == 'push'
+      && vars.PUBLISH_ENABLED == 'true'
+      && needs.plan.result == 'success'
+      && (needs.build.result == 'success' || needs.build.result == 'skipped')
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write # tags, GitHub releases, release PR branch
+      pull-requests: write # release PR
+      id-token: write # OIDC trusted publishing (crates.io, npm)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: npm with trusted publishing support
+        run: npm install -g npm@11.20.0
+
+      - name: Download binaries
+        if: needs.plan.outputs.publish == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+      - name: Use the loader generated for this version
+        if: needs.plan.outputs.publish == 'true'
+        run: cp dist/js-binding/index.js dist/js-binding/index.d.ts crates/mkext2-node/
+
+      - name: Get a crates.io token (OIDC)
+        id: crates-io
+        if: needs.plan.outputs.publish == 'true'
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+
+      - name: Publish npm platform packages (OIDC)
+        if: needs.plan.outputs.publish == 'true'
+        run: bash scripts/publish-npm.sh dist
+
+      - name: Cache Sampo
+        id: cache-sampo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/sampo-github-action
+          key: sampo-github-action-${{ env.SAMPO_GITHUB_ACTION }}-${{ runner.os }}-${{ runner.arch }}
+      - name: Install Sampo
+        if: steps.cache-sampo.outputs.cache-hit != 'true'
+        run: cargo install sampo-github-action --version "$SAMPO_GITHUB_ACTION" --locked
+
+      # Same as the bruits/sampo action, minus its unpinned installer.
+      - name: Release PR or publish
+        id: sampo
+        run: sampo-github-action
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_COMMAND: auto
+          INPUT_CREATE_GITHUB_RELEASE: "true"
+          INPUT_CARGO_TOKEN: ${{ steps.crates-io.outputs.token }}

@@ -1,0 +1,54 @@
+{
+  "name": "@tuler/mkext2",
+  "version": "0.1.0",
+  "description": "Reproducible ext2 filesystem image generator (xgenext2fs compatible), as a native Node.js module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tuler/mkext2.git",
+    "directory": "crates/mkext2-node"
+  },
+  "homepage": "https://github.com/tuler/mkext2",
+  "keywords": [
+    "ext2",
+    "filesystem",
+    "image",
+    "genext2fs",
+    "reproducible",
+    "cartesi"
+  ],
+  "main": "index.js",
+  "types": "index.d.ts",
+  "files": [
+    "index.js",
+    "index.d.ts"
+  ],
+  "napi": {
+    "binaryName": "mkext2",
+    "targets": [
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin",
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-pc-windows-msvc"
+    ]
+  },
+  "engines": {
+    "node": ">= 18"
+  },
+  "scripts": {
+    "build": "npx -y -p @napi-rs/cli@3.10.8 napi build --platform --release",
+    "build:debug": "npx -y -p @napi-rs/cli@3.10.8 napi build --platform",
+    "test": "node --test __test__/index.test.mjs"
+  },
+  "optionalDependencies": {
+    "@tuler/mkext2-darwin-x64": "0.1.0",
+    "@tuler/mkext2-darwin-arm64": "0.1.0",
+    "@tuler/mkext2-linux-x64-gnu": "0.1.0",
+    "@tuler/mkext2-linux-arm64-gnu": "0.1.0",
+    "@tuler/mkext2-win32-x64-msvc": "0.1.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

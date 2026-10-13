@@ -1,0 +1,24 @@
+# Sampo configuration: https://github.com/bruits/sampo/blob/main/crates/sampo/README.md#configuration
+version = 1
+
+[git]
+default_branch = "main"
+# The crate and the npm package share the name "mkext2"; keep tags distinct.
+tag_format = "{ecosystem}-{package_name}-v{version}"
+
+[github]
+repository = "tuler/mkext2"
+
+[packages]
+# The napi glue crate is never published on its own (it ships inside the npm packages).
+ignore = ["cargo/mkext2-node"]
+# The crate, the npm package and its per-platform binaries always share one version.
+fixed = [[
+  "cargo/mkext2",
+  "npm/@tuler/mkext2",
+  "npm/@tuler/mkext2-darwin-x64",
+  "npm/@tuler/mkext2-darwin-arm64",
+  "npm/@tuler/mkext2-linux-x64-gnu",
+  "npm/@tuler/mkext2-linux-arm64-gnu",
+  "npm/@tuler/mkext2-win32-x64-msvc",
+]]

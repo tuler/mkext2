@@ -1,0 +1,95 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup component add clippy rustfmt
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Install reference xgenext2fs (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          arch=$(dpkg --print-architecture)
+          curl -fsSL -o /tmp/xgenext2fs.deb \
+            "https://github.com/cartesi/genext2fs/releases/download/v1.5.6/xgenext2fs_${arch}.deb"
+          sudo apt-get update
+          sudo apt-get install -y /tmp/xgenext2fs.deb e2fsprogs
+          echo "E2FSCK=/usr/sbin/e2fsck" >> "$GITHUB_ENV"
+
+      - name: Install reference xgenext2fs (macOS)
+        if: runner.os == 'macOS'
+        run: brew install cartesi/tap/xgenext2fs gnu-tar
+
+      - run: xgenext2fs --version
+      - run: cargo test --release --workspace
+      - name: Randomized comparison
+        run: STRESS_SEEDS=200 cargo test --release --test compat stress -- --ignored
+
+      - name: Node binding
+        working-directory: crates/mkext2-node
+        run: |
+          npm run build
+          npm test
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - run: cargo build --release
+      - name: Build native binding
+        working-directory: crates/mkext2-node
+        run: |
+          npm run build
+          node -e "console.log('mkext2', require('./index.js').version())"
+
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install reference xgenext2fs
+        run: |
+          curl -fsSL -o /tmp/xgenext2fs.deb \
+            "https://github.com/cartesi/genext2fs/releases/download/v1.5.6/xgenext2fs_amd64.deb"
+          sudo apt-get install -y /tmp/xgenext2fs.deb
+      - run: scripts/bench.sh 1024 bench-work

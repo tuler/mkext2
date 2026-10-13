@@ -1,0 +1,9 @@
+{
+  "name": "mkext2-workspace",
+  "private": true,
+  "description": "npm workspace container (lets Sampo find the npm packages); not published",
+  "workspaces": [
+    "crates/mkext2-node",
+    "crates/mkext2-node/npm/*"
+  ]
+}
