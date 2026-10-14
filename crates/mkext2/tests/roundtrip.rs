@@ -585,3 +585,63 @@ fn fill_value_fills_free_blocks() {
         assert_eq!(free, img.superblock().free_blocks_count());
     }
 }
+
+#[test]
+fn long_names_are_skipped() {
+    // ext2 names are at most 255 bytes: a longer archive member is left out
+    fn header(name: &[u8], typeflag: u8, size: usize, gnu: bool) -> [u8; 512] {
+        let mut h = [0u8; 512];
+        h[..name.len()].copy_from_slice(name);
+        h[100..108].copy_from_slice(b"0000644\0");
+        h[108..116].copy_from_slice(b"0000000\0");
+        h[116..124].copy_from_slice(b"0000000\0");
+        h[124..136].copy_from_slice(format!("{size:011o}\0").as_bytes());
+        h[136..148].copy_from_slice(b"00000000000\0");
+        h[156] = typeflag;
+        h[257..265].copy_from_slice(if gnu { b"ustar  \0" } else { b"ustar\x0000" });
+        h[148..156].copy_from_slice(b"        ");
+        let sum: u32 = h.iter().map(|&c| u32::from(c)).sum();
+        h[148..156].copy_from_slice(format!("{sum:06o}\0 ").as_bytes());
+        h
+    }
+    let long = vec![b'g'; 300];
+    let mut tar = Vec::new();
+    let mut body = long.clone();
+    body.push(0);
+    tar.extend_from_slice(&header(b"././@LongLink", b'L', body.len(), true));
+    body.resize(512, 0);
+    tar.extend_from_slice(&body);
+    tar.extend_from_slice(&header(b"short", b'0', 3, true));
+    let mut data = b"abc".to_vec();
+    data.resize(512, 0);
+    tar.extend_from_slice(&data);
+    tar.extend_from_slice(&header(b"kept", b'0', 0, false));
+    tar.extend_from_slice(&[0u8; 1024]);
+    let opts = Options {
+        timestamps: Timestamps::Zero,
+        readjustment: Readjustment::parse("+100").unwrap(),
+        layers: vec![Layer::tar_bytes(tar)],
+        ..Options::default()
+    };
+    let (data, report) = build_vec(&opts).unwrap();
+    assert!(
+        report
+            .messages
+            .iter()
+            .any(|m| m.level == mkext2::Level::Warning
+                && m.text.contains("ggggg")
+                && m.text.contains("255")),
+        "{:?}",
+        report.messages
+    );
+    let img = Image::new(data).unwrap();
+    check_clean(&img);
+    assert!(img.lookup(b"/kept").unwrap().is_some());
+    let names: Vec<Vec<u8>> = img
+        .read_dir(2)
+        .unwrap()
+        .into_iter()
+        .map(|e| e.name)
+        .collect();
+    assert!(names.iter().all(|n| n.len() <= 255));
+}

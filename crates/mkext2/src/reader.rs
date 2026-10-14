@@ -842,6 +842,10 @@ pub struct CompareOptions {
     /// Ignore symbolic links whose target is not shorter than the block
     /// size: Linux and e2fsck reject them, so a tool may leave them out.
     pub skip_invalid_symlinks: bool,
+    /// Ignore entries whose name is longer than 255 bytes (and anything
+    /// below them): ext2 with the filetype feature cannot store them, and
+    /// Linux rejects them, so a tool may leave them out.
+    pub skip_invalid_names: bool,
 }
 
 impl Default for CompareOptions {
@@ -852,6 +856,7 @@ impl Default for CompareOptions {
             ignore_lost_found: true,
             superblock: true,
             skip_invalid_symlinks: true,
+            skip_invalid_names: true,
         }
     }
 }
@@ -887,6 +892,9 @@ pub fn compare_content(a: &Image, b: &Image, opts: &CompareOptions) -> Result<Ve
             .into_iter()
             .filter(|n| !(opts.ignore_lost_found && lost_found(n)))
             .filter(|n| !(opts.skip_invalid_symlinks && n.mode & S_IFMT == S_IFLNK && n.size >= bs))
+            .filter(|n| {
+                !(opts.skip_invalid_names && n.path.split(|&c| c == b'/').any(|c| c.len() > 255))
+            })
             .map(|mut n| {
                 // lost+found's ".." adds a link to the root
                 if opts.ignore_lost_found && has_lf && n.path == b"/" {

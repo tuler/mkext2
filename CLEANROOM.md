@@ -86,3 +86,11 @@ scripts, the CI and release workflows and the documentation.
   packages were read, searched for or downloaded, no web searches were made,
   and nothing outside this repository was opened besides the installed
   binaries, the container and a private scratch directory.
+
+- 2026-10-13, at the specification author's request: `reader::compare_content`
+  gained `CompareOptions::skip_invalid_names` (default on), which ignores
+  entries with a name longer than 255 bytes, like invalid symlinks.
+  xgenext2fs stores such names (its images have 16-bit name lengths), but
+  ext2 with `filetype` cannot and Linux rejects them; the specification leaves
+  them out. `crafted_tarballs` keeps its 300-byte member and now checks that
+  mkext2 leaves it out with a valid image; a roundtrip test checks the warning.
