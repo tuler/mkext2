@@ -41,8 +41,6 @@ impl Log {
 /// How input metadata is turned into inode metadata.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Policy {
-    /// The filesystem time.
-    pub fs_time: u32,
     pub timestamps: Timestamps,
     pub squash_uid: Option<u32>,
     pub squash_perms: bool,
@@ -50,9 +48,6 @@ pub(crate) struct Policy {
 
 impl Policy {
     pub fn time(&self, t: i64) -> u32 {
-        if self.fs_time == 0 {
-            return 0;
-        }
         match self.timestamps {
             Timestamps::Source => t as u32,
             Timestamps::Zero => 0,

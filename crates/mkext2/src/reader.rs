@@ -118,7 +118,13 @@ impl Image {
             return Err(corrupt("bad block size"));
         }
         let bs = sb.block_size();
-        if sb.blocks_per_group() == 0 || sb.inodes_per_group() == 0 {
+        if sb.blocks_per_group() == 0
+            || sb.inodes_per_group() == 0
+            || sb.blocks_per_group() > bs * 8
+            || sb.inodes_per_group() > bs * 8
+            || sb.first_data_block() != u32::from(bs == 1024)
+            || sb.blocks_count() <= sb.first_data_block()
+        {
             return Err(corrupt("bad group geometry"));
         }
         let inode_size = if sb.rev_level() >= 1 {
@@ -130,7 +136,14 @@ impl Image {
             return Err(corrupt("bad inode size"));
         }
         let ngroups = sb.group_count();
+        if u64::from(sb.inodes_count()) != u64::from(ngroups) * u64::from(sb.inodes_per_group()) {
+            return Err(corrupt("bad inode count"));
+        }
         let gdt = (u64::from(sb.first_data_block()) + 1) * u64::from(bs);
+        let gdt_end = gdt + u64::from(ngroups) * GROUP_DESC_SIZE as u64;
+        if gdt_end > data.len() as u64 {
+            return Err(corrupt("group descriptor table out of range"));
+        }
         let mut gds = Vec::with_capacity(ngroups as usize);
         for g in 0..u64::from(ngroups) {
             let off = (gdt + g * GROUP_DESC_SIZE as u64) as usize;
@@ -414,8 +427,8 @@ impl Image {
                 path: path.clone(),
                 inode: n,
                 mode: u32::from(ino.mode()),
-                uid: u32::from(ino.uid()),
-                gid: u32::from(ino.gid()),
+                uid: ino.uid32(),
+                gid: ino.gid32(),
                 size: ino.size64(),
                 links: ino.links_count(),
                 atime: ino.atime(),
@@ -832,6 +845,8 @@ impl Image {
 pub struct CompareOptions {
     /// Compare atime, ctime and mtime.
     pub times: bool,
+    /// Compare only the low 16 bits of uid/gid, for tools that truncate owners.
+    pub owner_low_bits: bool,
     /// Compare only the low 8 bits of device numbers (a tool storing just
     /// 8 bits is still considered equivalent).
     pub device_low_bits: bool,
@@ -852,6 +867,7 @@ impl Default for CompareOptions {
     fn default() -> Self {
         CompareOptions {
             times: true,
+            owner_low_bits: false,
             device_low_bits: false,
             ignore_lost_found: true,
             superblock: true,
@@ -938,7 +954,12 @@ pub fn compare_content(a: &Image, b: &Image, opts: &CompareOptions) -> Result<Ve
                 y.mode & 0o7777
             ));
         }
-        if (x.uid, x.gid) != (y.uid, y.gid) {
+        let owner_mask = if opts.owner_low_bits {
+            0xffff
+        } else {
+            u32::MAX
+        };
+        if (x.uid & owner_mask, x.gid & owner_mask) != (y.uid & owner_mask, y.gid & owner_mask) {
             diffs.push(format!(
                 "{what}: owner {}:{} vs {}:{}",
                 x.uid, x.gid, y.uid, y.gid

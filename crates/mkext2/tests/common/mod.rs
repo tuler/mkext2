@@ -368,6 +368,9 @@ pub fn compare(work: &Path, args: &[&str]) -> Result<CompareOutcome, String> {
     let ri = fs::read(ref_dir.join("image.img")).unwrap();
     let ref_img = mkext2::reader::Image::new(ri).map_err(|e| e.to_string())?;
     let opts = mkext2::reader::CompareOptions {
+        // xgenext2fs stores only the low 16 bits; full owners are checked
+        // independently in roundtrip tests.
+        owner_low_bits: true,
         device_low_bits: true,
         ..Default::default()
     };

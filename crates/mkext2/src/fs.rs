@@ -361,8 +361,13 @@ impl Bitmap {
     }
 
     pub fn set_range(&mut self, start: usize, len: usize) {
-        for i in start..start + len {
-            self.set(i);
+        let end = start + len;
+        let mut i = start;
+        while i < end {
+            let shift = i % 64;
+            let n = (64 - shift).min(end - i);
+            self.words[i / 64] |= (u64::MAX >> (64 - n)) << shift;
+            i += n;
         }
     }
 
@@ -388,11 +393,18 @@ impl Bitmap {
 
     /// Number of consecutive clear bits starting at `from`, at most `max`.
     pub fn clear_run(&self, from: usize, max: usize) -> usize {
-        let mut n = 0;
-        while n < max && from + n < self.len && !self.get(from + n) {
-            n += 1;
+        let end = from.saturating_add(max).min(self.len);
+        let mut i = from;
+        while i < end {
+            let shift = i % 64;
+            let n = (64 - shift).min(end - i);
+            let clear = (self.words[i / 64] >> shift).trailing_zeros() as usize;
+            if clear < n {
+                return i - from + clear;
+            }
+            i += n;
         }
-        n
+        i - from
     }
 
     pub fn count_set(&self, start: usize, len: usize) -> usize {
@@ -418,10 +430,12 @@ impl Bitmap {
     /// into `out` (which is zeroed first).
     pub fn copy_bytes(&self, start: usize, len: usize, out: &mut [u8]) {
         out.fill(0);
-        for k in 0..len {
-            if self.get(start + k) {
-                out[k / 8] |= 1 << (k % 8);
-            }
+        for (k, byte) in out.iter_mut().take(len.div_ceil(8)).enumerate() {
+            let bit = start + k * 8;
+            *byte = (self.words[bit / 64] >> (bit % 64)) as u8;
+        }
+        if len % 8 != 0 {
+            out[len / 8] &= u8::MAX >> (8 - len % 8);
         }
     }
 }
@@ -566,18 +580,26 @@ impl<'d> Fs<'d> {
                 "unsupported features (only filetype, sparse_super and large_file are)",
             ));
         }
-        let geo = Geometry::from_superblock(&sb);
-        let bs = geo.bs;
-        if geo.bpg == 0
-            || geo.ipg == 0
-            || geo.bpg > bs * 8
-            || geo.ipg > bs * 8
-            || geo.bpg % 8 != 0
-            || geo.ipg % 8 != 0
-            || geo.fdb != u32::from(bs == 1024)
+        let bs = sb.block_size();
+        let inode_count = u64::from(sb.group_count()) * u64::from(sb.inodes_per_group());
+        if sb.blocks_per_group() == 0
+            || sb.inodes_per_group() == 0
+            || sb.blocks_per_group() > bs * 8
+            || sb.inodes_per_group() > bs * 8
+            || sb.blocks_per_group() % 8 != 0
+            || sb.inodes_per_group() % 8 != 0
+            || sb.first_data_block() != u32::from(bs == 1024)
+            || sb.blocks_count() <= sb.first_data_block()
+            || inode_count != u64::from(sb.inodes_count())
             || u64::from(sb.blocks_count()) * u64::from(bs) > dev.size()?
         {
             return Err(bad("inconsistent geometry"));
+        }
+        let geo = Geometry::from_superblock(&sb);
+        let gdt_end =
+            u64::from(geo.fdb + 1) * u64::from(bs) + u64::from(geo.groups) * GROUP_DESC_SIZE as u64;
+        if gdt_end > u64::from(geo.blocks) * u64::from(bs) {
+            return Err(bad("group descriptor table out of range"));
         }
         let mut gdt = vec![0u8; geo.groups as usize * GROUP_DESC_SIZE];
         dev.read_at(u64::from(geo.fdb + 1) * u64::from(bs), &mut gdt)?;
@@ -1196,5 +1218,48 @@ mod tests {
         b.set(199);
         assert_eq!(b.count_set(0, 200), 71);
         assert_eq!(b.clear_run(70, 1000), 129);
+    }
+
+    #[test]
+    fn bitmap_ranges_match_individual_bits() {
+        let len = 137;
+        for start in 0..=len {
+            for count in 0..=len - start {
+                let mut bitmap = Bitmap::new(len);
+                let mut bits = vec![false; len];
+                for i in (0..len).step_by(17) {
+                    bitmap.set(i);
+                    bits[i] = true;
+                }
+                bitmap.set_range(start, count);
+                bits[start..start + count].fill(true);
+                for (i, &bit) in bits.iter().enumerate() {
+                    assert_eq!(bitmap.get(i), bit, "start {start}, count {count}, bit {i}");
+                }
+                for from in [0, start, start + count, len, len + 1] {
+                    for max in [0, 1, 63, 64, usize::MAX] {
+                        let expected = bits
+                            .iter()
+                            .skip(from)
+                            .take(max)
+                            .take_while(|&&bit| !bit)
+                            .count();
+                        assert_eq!(bitmap.clear_run(from, max), expected);
+                    }
+                }
+                for byte_start in (0..=len).step_by(8) {
+                    let n = len - byte_start;
+                    let mut actual = vec![0xff; n.div_ceil(8) + 2];
+                    let mut expected = vec![0; actual.len()];
+                    for (i, &bit) in bits[byte_start..].iter().enumerate() {
+                        if bit {
+                            expected[i / 8] |= 1 << (i % 8);
+                        }
+                    }
+                    bitmap.copy_bytes(byte_start, n, &mut actual);
+                    assert_eq!(actual, expected);
+                }
+            }
+        }
     }
 }

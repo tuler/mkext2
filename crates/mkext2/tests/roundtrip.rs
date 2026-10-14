@@ -393,6 +393,82 @@ fn device_table_bytes() {
 }
 
 #[test]
+fn walk_preserves_full_owners() {
+    let img = build(&Options {
+        timestamps: Timestamps::Zero,
+        layers: vec![Layer::devtable_bytes(b"/file f 644 70000 80000\n".to_vec())],
+        ..Options::default()
+    });
+    check_clean(&img);
+    let nodes = img.walk().unwrap();
+    let file = nodes.iter().find(|n| n.path == b"/file").unwrap();
+    assert_eq!((file.uid, file.gid), (70000, 80000));
+}
+
+#[test]
+fn content_comparison_checks_high_owner_bits() {
+    use mkext2::reader::{CompareOptions, compare_content};
+    let image = |uid, gid| {
+        build(&Options {
+            timestamps: Timestamps::Zero,
+            layers: vec![Layer::devtable_bytes(
+                format!("/file f 644 {uid} {gid}\n").into_bytes(),
+            )],
+            ..Options::default()
+        })
+    };
+    let full = image(70000, 80000);
+    let low = image(70000 & 0xffff, 80000 & 0xffff);
+    let diffs = compare_content(&full, &low, &CompareOptions::default()).unwrap();
+    assert_eq!(diffs.len(), 1);
+    assert!(diffs[0].contains("owner"));
+    assert!(
+        compare_content(
+            &full,
+            &low,
+            &CompareOptions {
+                owner_low_bits: true,
+                ..CompareOptions::default()
+            }
+        )
+        .unwrap()
+        .is_empty()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn starting_image_can_be_updated_through_a_hard_link() {
+    let t = TempDir::new();
+    let original = t.path().join("original.ext2");
+    let alias = t.path().join("alias.ext2");
+    mkext2::build_file(
+        &Options {
+            size_in_blocks: Some(128),
+            timestamps: Timestamps::Zero,
+            ..Options::default()
+        },
+        &original,
+    )
+    .unwrap();
+    fs::hard_link(&original, &alias).unwrap();
+    mkext2::build_file(
+        &Options {
+            starting_image: Some(mkext2::Source::Path(original.clone())),
+            timestamps: Timestamps::Zero,
+            layers: vec![Layer::devtable_bytes(b"/added f 644 0 0\n".to_vec())],
+            ..Options::default()
+        },
+        &alias,
+    )
+    .unwrap();
+    assert_eq!(fs::read(&original).unwrap(), fs::read(&alias).unwrap());
+    let image = Image::open(&original).unwrap();
+    check_clean(&image);
+    assert!(image.lookup(b"/added").unwrap().is_some());
+}
+
+#[test]
 fn starting_image_extends_content() {
     let t = TempDir::new();
     let a = t.path().join("a");

@@ -129,9 +129,18 @@ fn seconds(name: &str, v: &[u8]) -> Result<u32> {
     })
 }
 
-/// Split `source[:target]` at the first ':'.
+/// Split `source[:target]`, preserving a Windows drive prefix.
 fn layer(kind: LayerKind, v: &[u8]) -> Result<Layer> {
-    let (src, target) = match v.iter().position(|&c| c == b':') {
+    let start = if cfg!(windows) && v.len() >= 2 && v[0].is_ascii_alphabetic() && v[1] == b':' {
+        2
+    } else {
+        0
+    };
+    let separator = v[start..]
+        .iter()
+        .position(|&c| c == b':')
+        .map(|i| start + i);
+    let (src, target) = match separator {
         Some(i) => (&v[..i], Some(&v[i + 1..])),
         None => (v, None),
     };
@@ -564,7 +573,7 @@ mod tests {
         ]);
         assert_eq!(o.block_size, 2048);
         assert_eq!(o.layers.len(), 1);
-        let (o, out) = opts(&["-d", "a:/opt", "--", "-x"]);
+        let (o, out) = opts(&["-d", "dir:/opt", "--", "-x"]);
         assert_eq!(out, "-x");
         assert_eq!(o.layers[0].target.as_deref(), Some(&b"/opt"[..]));
         assert!(parse(&["img", "--", "-x"]).is_err());
@@ -578,6 +587,21 @@ mod tests {
         assert_eq!(out, "-");
         assert!(matches!(o.layers[0].source, Source::Stdin));
         assert_eq!(o.layers[0].target.as_deref(), Some(&b"/x"[..]));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_drive_paths_and_targets() {
+        for (flag, input, source, target) in [
+            ("-d", r"C:\root", r"C:\root", None),
+            ("-a", "C:/root.tar:/opt", "C:/root.tar", Some("/opt")),
+            ("-D", "C:devices.txt:/dev", "C:devices.txt", Some("/dev")),
+        ] {
+            let (options, _) = opts(&[flag, input, "out.ext2"]);
+            let layer = &options.layers[0];
+            assert!(matches!(&layer.source, Source::Path(p) if p == &PathBuf::from(source)));
+            assert_eq!(layer.target.as_deref(), target.map(str::as_bytes));
+        }
     }
 
     #[test]

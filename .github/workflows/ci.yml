@@ -75,6 +75,7 @@ jobs:
         with:
           node-version: 24
       - run: cargo build --release
+      - run: cargo test --release --lib
       - name: Build native binding
         working-directory: crates/mkext2-node
         run: |

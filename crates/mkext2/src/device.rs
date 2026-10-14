@@ -50,6 +50,8 @@ struct Writer {
 const RUN_LIMIT: usize = 8 << 20;
 /// Total buffered bytes before the largest run is written out.
 const PENDING_LIMIT: usize = 64 << 20;
+/// Bound searches over small, disjoint runs as well as their total bytes.
+const RUN_COUNT_LIMIT: usize = 64;
 /// Runs queued for the writer thread.
 const QUEUE: usize = 4;
 
@@ -195,6 +197,21 @@ impl Device for FileDevice {
     }
 
     fn write_at(&mut self, offset: u64, buf: &[u8]) -> io::Result<()> {
+        if buf.is_empty() {
+            return Ok(());
+        }
+        let end = offset
+            .checked_add(buf.len() as u64)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "write offset overflow"))?;
+        // Flush every older overlapping run before merging or queuing this
+        // write. An append can extend across another pending run too.
+        while let Some(i) = self
+            .runs
+            .iter()
+            .position(|r| r.offset < end && offset < r.offset + r.data.len() as u64)
+        {
+            self.flush_run(i)?;
+        }
         // extend a run ending exactly here
         if let Some(i) = self
             .runs
@@ -208,15 +225,6 @@ impl Device for FileDevice {
                 self.flush_run(i)?;
             }
         } else {
-            // anything overlapping a pending run must be written first
-            let end = offset + buf.len() as u64;
-            while let Some(i) = self
-                .runs
-                .iter()
-                .position(|r| r.offset < end && offset < r.offset + r.data.len() as u64)
-            {
-                self.flush_run(i)?;
-            }
             if buf.len() >= RUN_LIMIT {
                 return self.submit(Run {
                     offset,
@@ -228,7 +236,7 @@ impl Device for FileDevice {
             self.pending += buf.len();
             self.runs.push(Run { offset, data });
         }
-        while self.pending > PENDING_LIMIT {
+        while self.pending > PENDING_LIMIT || self.runs.len() > RUN_COUNT_LIMIT {
             let largest = (0..self.runs.len())
                 .max_by_key(|&i| self.runs[i].data.len())
                 .unwrap();
@@ -243,6 +251,7 @@ impl Device for FileDevice {
     }
 
     fn size(&mut self) -> io::Result<u64> {
+        self.sync_writes()?;
         Ok(self.file.metadata()?.len())
     }
 
@@ -343,5 +352,53 @@ impl<D: Device + ?Sized> Device for Box<D> {
     }
     fn as_mut_slice(&mut self) -> Option<&mut [u8]> {
         (**self).as_mut_slice()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn overlapping_writes_preserve_call_order() {
+        let mut file = FileDevice::new(tempfile::tempfile().unwrap());
+        // Extending the second run also overwrites the first run.
+        file.write_at(2, b"old").unwrap();
+        file.write_at(0, b"a").unwrap();
+        file.write_at(1, b"new!").unwrap();
+        let mut actual = [0; 5];
+        file.read_at(0, &mut actual).unwrap();
+        assert_eq!(&actual, b"anew!");
+    }
+
+    #[test]
+    fn size_includes_buffered_writes() {
+        let mut file = FileDevice::new(tempfile::tempfile().unwrap());
+        file.write_at(10, b"data").unwrap();
+        assert_eq!(file.size().unwrap(), 14);
+        file.set_len(2).unwrap();
+        assert_eq!(file.size().unwrap(), 2);
+    }
+
+    #[test]
+    fn interleaved_writes_match_memory() {
+        let mut file = FileDevice::new(tempfile::tempfile().unwrap());
+        let mut memory = MemDevice::new();
+        // Enough disjoint runs to exercise eviction and the writer queue.
+        for offset in (0..200).map(|i| i * 32) {
+            file.write_at(offset, &[1; 8]).unwrap();
+            memory.write_at(offset, &[1; 8]).unwrap();
+        }
+        let mut seed = 42u64;
+        for _ in 0..1000 {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let offset = seed % 6400;
+            let bytes = seed.to_le_bytes();
+            file.write_at(offset, &bytes).unwrap();
+            memory.write_at(offset, &bytes).unwrap();
+        }
+        let mut actual = vec![0; memory.as_slice().len()];
+        file.read_at(0, &mut actual).unwrap();
+        assert_eq!(actual, memory.as_slice());
     }
 }

@@ -193,19 +193,21 @@ fn source_date_epoch_only_sets_filesystem_time() {
     let t = TempDir::new();
     let root = t.path().join("tree");
     make_tree(&root, false, 1_234_567);
-    let (data, _) = build_vec(&Options {
-        source_date_epoch: Some(42),
-        ..opts(&root, Timestamps::Source)
-    })
-    .unwrap();
-    let img = Image::new(data).unwrap();
-    assert_eq!(img.superblock().wtime(), 42);
-    let root_ino = img.inode(2).unwrap();
-    assert_eq!(root_ino.mtime(), 42);
-    let f = img
-        .inode(img.lookup(b"/a/b/c.txt").unwrap().unwrap())
+    for epoch in [0, 42] {
+        let (data, _) = build_vec(&Options {
+            source_date_epoch: Some(epoch),
+            ..opts(&root, Timestamps::Source)
+        })
         .unwrap();
-    assert_eq!(f.mtime(), 1_234_567);
+        let img = Image::new(data).unwrap();
+        assert_eq!(img.superblock().wtime(), epoch as u32);
+        let root_ino = img.inode(2).unwrap();
+        assert_eq!(root_ino.mtime(), epoch as u32);
+        let f = img
+            .inode(img.lookup(b"/a/b/c.txt").unwrap().unwrap())
+            .unwrap();
+        assert_eq!(f.mtime(), 1_234_567);
+    }
 }
 
 #[test]

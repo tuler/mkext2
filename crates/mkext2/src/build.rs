@@ -199,6 +199,13 @@ fn read_source(s: &Source) -> Result<Arc<[u8]>> {
 }
 
 fn same_file(a: &Path, b: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let (Ok(x), Ok(y)) = (std::fs::metadata(a), std::fs::metadata(b)) {
+            return x.dev() == y.dev() && x.ino() == y.ino();
+        }
+    }
     match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
         (Ok(x), Ok(y)) => x == y,
         _ => false,
@@ -233,7 +240,6 @@ fn run(options: &Options, target: Target<'_>) -> Result<(Option<Vec<u8>>, Report
         }
     }
     let policy = Policy {
-        fs_time: st.fs_time,
         timestamps: options.timestamps,
         squash_uid: options.squash_uids,
         squash_perms: options.squash_perms,
