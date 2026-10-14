@@ -18,8 +18,8 @@ mkext2 is a Rust implementation compatible with
   directory entries are sorted, nothing random is written (UUID stays zero),
   and timestamps can be zeroed (`--faketime`), fixed (`--timestamp`) or
   clamped (`--clamp-timestamps`). Read-ahead threads never change the output.
-- **Fast.** Building a 1 GiB image is about 5× faster than xgenext2fs with
-  4 KiB blocks and about 50× faster with 1 KiB blocks (see
+- **Fast.** Building a 1 GiB image is about 7× faster than xgenext2fs with
+  4 KiB blocks and about 90× faster with 1 KiB blocks (see
   [Performance](#performance)).
 - **Inputs:** directories, tar archives (ustar, GNU incl. long names and old
   sparse files, pax incl. GNU sparse 0.0/0.1/1.0, v7; gzip, bzip2, xz and zstd
@@ -184,8 +184,20 @@ STRESS_SEEDS=500 cargo test --release --test compat stress -- --ignored
 ## Performance
 
 `scripts/bench.sh [MiB]` generates a dataset shaped like a root filesystem and times
-both tools, checking that both images are valid and hold the same content. See the
-latest results in the release notes.
+both tools (best of three runs), checking that both images are valid and hold the
+same content. `scripts/bench.sh 1024` on an Apple M1 Max (macOS, APFS; 13,301 files
+in 415 directories, 1 GiB):
+
+| case | xgenext2fs 1.5.6 | mkext2 | speedup | same content |
+|---|---:|---:|---:|---|
+| directory (4 KiB blocks) | 2.39 s | 0.33 s | 7.3× | yes |
+| directory (1 KiB blocks) | 43.40 s | 0.47 s | 91.6× | yes |
+| tar (4 KiB blocks) | 2.24 s | 0.26 s | 8.6× | yes |
+| tar.gz (4 KiB blocks) | 2.70 s | 1.17 s | 2.3× | yes |
+| empty 1 GiB image | 0.01 s | 0.01 s | 1.1× | yes |
+
+Compressed archives are decompressed twice (once to size the image, once to
+copy the data), which dominates the `tar.gz` case.
 
 ## Releasing
 

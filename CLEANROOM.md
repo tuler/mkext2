@@ -57,3 +57,32 @@ scripts, the CI and release workflows and the documentation.
   replaced with new tables, and the tests check validity and content equivalence
   with xgenext2fs instead of identical bytes, and do not depend on the exact
   wording of messages.
+
+- 2026-10-13, implementer (a Claude Opus 5.5 session that had never seen
+  genext2fs' source or the earlier port): wrote the engine from
+  `docs/SPEC.md`, the kept modules and the public ext2 format description —
+  `src/ondisk.rs` (structures), `src/fs.rs` (geometry, bitmaps, cursor
+  allocation, file/directory/pointer block writing, metadata), `src/tree.rs`
+  (content model), `src/size.rs` (exact sizing), `src/layers.rs` (directory,
+  archive and device table layers, ownership/permission/time policies),
+  `src/build.rs` (builder API, starting images, block maps, verbose output),
+  `src/options.rs`, `src/cli.rs` (getopt_long-compatible parser, own help and
+  messages), `src/main.rs` and `src/lib.rs`. Kept modules were adapted only
+  in `src/source/dir.rs` (device number in `Meta` for hard-link identity, a
+  readability check). The design is mkext2's own: block groups of 8 × block
+  size blocks (balanced when the last group cannot hold its metadata),
+  `sparse_super` + `filetype`, one forward-only allocation cursor so each file
+  is contiguous with its pointer blocks just before the data they map,
+  inodes numbered in input order, a 16-block `lost+found`, and a search for
+  the smallest size whose geometry holds the counted content.
+  Behaviors the specification leaves open were settled by running the
+  installed `xgenext2fs` 1.5.6 binary as a black box and reading its images
+  with the kept reader (for example: symlinks are always 0777; a tar `./`
+  member changes the root's permissions and owner but not its times; device
+  table names ending in `.` are skipped; `lost+found` has 16 blocks; tar link
+  members that libarchive types as regular files are regular files). Images
+  were also checked with e2fsck 1.47.0 from a local Debian container. The
+  rules above were followed: no genext2fs/xgenext2fs source, forks or
+  packages were read, searched for or downloaded, no web searches were made,
+  and nothing outside this repository was opened besides the installed
+  binaries, the container and a private scratch directory.
