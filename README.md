@@ -25,6 +25,29 @@ mkext2 is a Rust implementation compatible with
   sparse files, pax incl. GNU sparse 0.0/0.1/1.0, v7; gzip, bzip2, xz and zstd
   compression, nested) and device tables. Layers can be combined.
 
+## Installing the CLI
+
+mkext2 is installed with Cargo, Rust's package manager (Rust 1.85 or later, from
+[rustup.rs](https://rustup.rs)):
+
+```bash
+cargo install mkext2
+```
+
+or, for the latest version on GitHub:
+
+```bash
+cargo install --locked --git https://github.com/tuler/mkext2 mkext2
+```
+
+Either command builds the `mkext2` binary and puts it in `~/.cargo/bin`, which
+rustup adds to your `PATH`. The build also needs a C compiler, for the bundled
+xz and zstd decompressors (on macOS, the Xcode command line tools; on
+Debian/Ubuntu, `build-essential`). Check the install with `mkext2 --version`.
+
+The npm package [`@tuler/mkext2`](#nodejs) provides the library and the
+`mkext2()` function, not a command line binary.
+
 ## Command line
 
 ```
