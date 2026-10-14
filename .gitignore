@@ -6,3 +6,4 @@ node_modules/
 /bench-work/
 crates/mkext2-node/npm/*/*.node
 dist/
+.DS_Store
