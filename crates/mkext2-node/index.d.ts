@@ -15,7 +15,7 @@ export declare function build(output: string, options: BuildOptions): Promise<Bu
 /** Build an image in memory. */
 export declare function buildBuffer(options: BuildOptions): Promise<Buffer>
 
-/** Image description; mirrors xgenext2fs' command line options. */
+/** Image description; mirrors the command line options. */
 export interface BuildOptions {
   /** 1024 (default), 2048 or 4096 (`-B`). */
   blockSize?: number
@@ -98,7 +98,15 @@ export interface Message {
   text: string
 }
 
-/** Outcome of [`xgenext2fs`]. */
+/**
+ * Run with command line arguments (without the program name), as the
+ * `mkext2` tool takes them (the same as xgenext2fs'),
+ * e.g. `["--block-size", "4096", "--faketime", "--root", "dir", "out.ext2"]`.
+ * Rejects with the error message when the tool would exit with an error.
+ */
+export declare function mkext2(args: Array<string>): Promise<RunResult>
+
+/** Outcome of [`mkext2`]. */
 export interface RunResult {
   /**
    * What the command line tool would print on standard output
@@ -113,10 +121,3 @@ export interface RunResult {
 
 /** Version of the mkext2 library. */
 export declare function version(): string
-
-/**
- * Run with xgenext2fs command line arguments (without the program name),
- * e.g. `["--block-size", "4096", "--faketime", "--root", "dir", "out.ext2"]`.
- * Rejects with the error message when the tool would exit with an error.
- */
-export declare function xgenext2fs(args: Array<string>): Promise<RunResult>

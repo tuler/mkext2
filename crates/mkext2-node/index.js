@@ -781,5 +781,5 @@ module.exports = nativeBinding
 module.exports.build = nativeBinding.build
 module.exports.buildBuffer = nativeBinding.buildBuffer
 module.exports.buildSync = nativeBinding.buildSync
+module.exports.mkext2 = nativeBinding.mkext2
 module.exports.version = nativeBinding.version
-module.exports.xgenext2fs = nativeBinding.xgenext2fs

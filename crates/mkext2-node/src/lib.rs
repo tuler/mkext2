@@ -22,7 +22,7 @@ pub struct LayerSpec {
     pub target: Option<String>,
 }
 
-/// Image description; mirrors xgenext2fs' command line options.
+/// Image description; mirrors the command line options.
 #[napi(object)]
 #[derive(Default)]
 pub struct BuildOptions {
@@ -267,7 +267,7 @@ pub fn build_buffer(options: BuildOptions) -> Result<AsyncTask<BuildBufferTask>>
     }))
 }
 
-/// Outcome of [`xgenext2fs`].
+/// Outcome of [`mkext2`].
 #[napi(object)]
 pub struct RunResult {
     /// What the command line tool would print on standard output
@@ -292,7 +292,7 @@ impl Task for RunTask {
         match parse_args(&args).map_err(err)? {
             Command::Help => Ok(RunResult {
                 stdout: String::new(),
-                stderr: mkext2::cli::help_text("xgenext2fs"),
+                stderr: mkext2::cli::help_text("mkext2"),
                 result: None,
             }),
             Command::Version => Ok(RunResult {
@@ -315,7 +315,7 @@ impl Task for RunTask {
                 options.message_sink = Some(Arc::new(move |m: &mkext2::Message| {
                     let mut s = sink.lock().unwrap();
                     if m.level == mkext2::Level::Warning {
-                        s.push_str("xgenext2fs: ");
+                        s.push_str("mkext2: ");
                     }
                     s.push_str(&m.text);
                     s.push('\n');
@@ -346,11 +346,12 @@ impl Task for RunTask {
     }
 }
 
-/// Run with xgenext2fs command line arguments (without the program name),
+/// Run with command line arguments (without the program name), as the
+/// `mkext2` tool takes them (the same as xgenext2fs'),
 /// e.g. `["--block-size", "4096", "--faketime", "--root", "dir", "out.ext2"]`.
 /// Rejects with the error message when the tool would exit with an error.
-#[napi(js_name = "xgenext2fs", ts_return_type = "Promise<RunResult>")]
-pub fn xgenext2fs(args: Vec<String>) -> AsyncTask<RunTask> {
+#[napi(js_name = "mkext2", ts_return_type = "Promise<RunResult>")]
+pub fn mkext2_cli(args: Vec<String>) -> AsyncTask<RunTask> {
     AsyncTask::new(RunTask { args })
 }
 

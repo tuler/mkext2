@@ -34,12 +34,12 @@ test('version', () => {
   assert.match(ext2.version(), /^\d+\.\d+\.\d+/)
 })
 
-test('xgenext2fs() with Cartesi CLI arguments matches the command line tool', async () => {
+test('mkext2() with Cartesi CLI arguments matches the command line tool', async () => {
   const { dir, root } = makeTree()
   try {
     const args = ['--block-size', '4096', '--faketime', '--readjustment', '+1000', '--root', root]
     reference([...args, join(dir, 'ref.ext2')], dir)
-    const r = await ext2.xgenext2fs([...args, join(dir, 'new.ext2')])
+    const r = await ext2.mkext2([...args, join(dir, 'new.ext2')])
     assert.ok(r.result.blocks > 0)
     assert.equal(typeof r.stderr, 'string')
     assert.ok(readFileSync(join(dir, 'ref.ext2')).equals(readFileSync(join(dir, 'new.ext2'))))
@@ -133,7 +133,7 @@ test('errors reject with a message', async () => {
     ext2.build('/tmp/x.ext2', { layers: [{ type: 'dir', path: '/does/not/exist' }] }),
     /does\/not\/exist/,
   )
-  await assert.rejects(ext2.xgenext2fs(['--bogus', 'x.img']), /bogus/)
+  await assert.rejects(ext2.mkext2(['--bogus', 'x.img']), /bogus/)
   assert.throws(() => ext2.buildSync('/tmp/x.ext2', { readjustment: '+5x' }), /readjustment/)
   assert.throws(() => ext2.buildSync('/tmp/x.ext2', { layers: [{ type: 'zip', path: 'a' }] }), /unknown layer type/)
 })

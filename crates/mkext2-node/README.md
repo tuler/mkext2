@@ -6,10 +6,10 @@ same arguments as cartesi's `xgenext2fs` 1.5.6 and stores the same content, in v
 reproducible images, faster.
 
 ```ts
-import { build, buildBuffer, xgenext2fs } from '@tuler/mkext2'
+import { build, buildBuffer, mkext2 } from '@tuler/mkext2'
 
-// drop-in replacement for spawning xgenext2fs
-await xgenext2fs(['--block-size', '4096', '--faketime', '--readjustment', '+1000', '--root', 'rootfs', 'out.ext2'])
+// the command line, in process (takes the same arguments as xgenext2fs)
+await mkext2(['--block-size', '4096', '--faketime', '--readjustment', '+1000', '--root', 'rootfs', 'out.ext2'])
 
 // typed options (builds run on the libuv thread pool)
 const info = await build('out.ext2', {
