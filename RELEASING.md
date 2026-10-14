@@ -11,6 +11,13 @@ mkext2 ships as:
 All seven always share one version (a Sampo `fixed` group in `.sampo/config.toml`).
 The `mkext2-node` crate is internal and never published.
 
+The crate's GitHub release (`cargo-mkext2-vX.Y.Z`) also carries the standalone
+`mkext2` CLI, as `mkext2-X.Y.Z-<target>.tar.gz` (`.zip` on Windows) for
+`x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, `x86_64-apple-darwin`,
+`aarch64-apple-darwin` and `x86_64-pc-windows-msvc`, plus `SHA256SUMS`. The
+Linux binaries are fully static (musl), the Windows one links the C runtime
+statically, and the macOS ones link only system libraries; the build checks this.
+
 ## Routine releases (with Sampo)
 
 Versions and changelogs come from [Sampo](https://github.com/bruits/sampo) changesets.
@@ -40,7 +47,9 @@ Versions and changelogs come from [Sampo](https://github.com/bruits/sampo) chang
    - the platform packages to npm (`scripts/publish-npm.sh`);
    - then, through Sampo, the crate to crates.io and `@tuler/mkext2` to npm;
    - then tags (`cargo-mkext2-vX.Y.Z`, `npm-@tuler/mkext2-vX.Y.Z`, …) and GitHub
-     releases.
+     releases;
+   - then attaches the CLI archives to the `cargo-mkext2-vX.Y.Z` release
+     (`upload-cli` job). Nothing is published unless every CLI build succeeds.
 
 Pull requests opened with the workflow token don't trigger other workflows, so
 CI doesn't run on the release PR by itself. Close and reopen it (or push to it)
@@ -49,8 +58,8 @@ if you want CI there.
 Release PR preparation runs whenever a push to `main` contains pending
 changesets, even while publishing is disabled. Native builds are skipped
 on that push; they run after the version PR is merged and publishing is
-enabled. A manual run builds the native binaries without creating a PR or
-publishing.
+enabled. A manual run builds the native binaries and the CLI archives
+(`cli-<target>` artifacts) without creating a PR or publishing.
 
 In **Settings → Actions → General → Workflow permissions**, enable
 **Allow GitHub Actions to create and approve pull requests** so Sampo can
@@ -98,7 +107,7 @@ only builds; it never publishes.
 gh workflow run release.yml -R tuler/mkext2
 gh run watch -R tuler/mkext2 $(gh run list -R tuler/mkext2 -w release.yml -L 1 --json databaseId -q '.[0].databaseId')
 rm -rf dist && gh run download -R tuler/mkext2 $(gh run list -R tuler/mkext2 -w release.yml -L 1 --json databaseId -q '.[0].databaseId') -D dist
-ls -R dist   # binding-<platform>/mkext2.<platform>.node and js-binding/index.{js,d.ts}
+ls -R dist   # binding-<platform>/mkext2.<platform>.node, js-binding/index.{js,d.ts}, cli-<target>/mkext2-*
 ```
 
 ### 2. Publish the crate
@@ -162,6 +171,15 @@ publishes itself, so it won't do this for you:
 git tag cargo-mkext2-v0.1.0 && git tag npm-@tuler/mkext2-v0.1.0
 git push origin cargo-mkext2-v0.1.0 npm-@tuler/mkext2-v0.1.0
 gh release create cargo-mkext2-v0.1.0 -R tuler/mkext2 --title "mkext2 0.1.0" --notes "First release."
+```
+
+To attach the CLI binaries to that release, use the `cli-*` artifacts of the
+manual run from step 1:
+
+```bash
+rm -rf cli && mkdir cli && cp dist/cli-*/mkext2-* cli/
+(cd cli && shasum -a 256 mkext2-* > SHA256SUMS)
+gh release upload cargo-mkext2-v0.1.0 -R tuler/mkext2 cli/*
 ```
 
 From now on, follow [Routine releases](#routine-releases-with-sampo).

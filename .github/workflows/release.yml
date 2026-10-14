@@ -5,7 +5,9 @@
 # merged, publishes:
 #   - the `mkext2` crate to crates.io,
 #   - `@tuler/mkext2` and its per-platform binary packages to npm,
-# then tags the versions and creates GitHub releases.
+# then tags the versions and creates GitHub releases. The static `mkext2`
+# command line binaries for every platform are attached to the crate's
+# release (cargo-mkext2-vX.Y.Z).
 #
 # Publishing uses OIDC trusted publishing only: no registry tokens are
 # stored in the repository. The registries trust this workflow file
@@ -16,7 +18,7 @@
 # Publishing is disabled until the repository variable PUBLISH_ENABLED is
 # "true" (see RELEASING.md for the first, manual release). Release PRs are
 # prepared independently of that switch. Running the workflow manually
-# (workflow_dispatch) only builds the native binaries.
+# (workflow_dispatch) only builds the native binaries and the CLI archives.
 name: Release
 
 on:
@@ -151,8 +153,89 @@ jobs:
             crates/mkext2-node/index.d.ts
           if-no-files-found: error
 
+  # Standalone command line binaries: fully static on Linux (musl) and
+  # Windows (static CRT); on macOS they link only system libraries.
+  build-cli:
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { os: macos-latest, target: aarch64-apple-darwin, smoke: true }
+          - { os: macos-latest, target: x86_64-apple-darwin }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl, smoke: true }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl, smoke: true }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, rustflags: -C target-feature=+crt-static, smoke: true }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      TARGET: ${{ matrix.target }}
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup target add "$TARGET"
+      - name: Install musl toolchain
+        if: contains(matrix.target, 'musl')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          # compile the bundled C libraries (xz, zstd) against musl too
+          echo "TARGET_CC=musl-gcc" >> "$GITHUB_ENV"
+      - name: Build
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+        run: cargo build --release --locked -p mkext2 --target "$TARGET"
+      - name: Check linkage
+        run: |
+          bin="target/$TARGET/release/mkext2"
+          case "$TARGET" in
+            *-linux-musl)
+              file "$bin"
+              if readelf -d "$bin" | grep NEEDED; then
+                echo "error: not statically linked" >&2
+                exit 1
+              fi
+              ;;
+            *-apple-darwin)
+              otool -L "$bin"
+              if otool -L "$bin" | tail -n +2 | grep -Ev '^\s+(/usr/lib|/System/Library)/'; then
+                echo "error: links libraries outside the OS" >&2
+                exit 1
+              fi
+              ;;
+          esac
+      - name: Smoke test
+        if: matrix.smoke
+        run: |
+          "target/$TARGET/release/mkext2" --version
+      - name: Package
+        run: |
+          name="mkext2-${VERSION}-${TARGET}"
+          mkdir -p "cli/$name"
+          cp README.md LICENSE NOTICE "cli/$name/"
+          cd cli
+          if [[ "$TARGET" == *windows* ]]; then
+            cp "../target/$TARGET/release/mkext2.exe" "$name/"
+            7z a "$name.zip" "$name"
+          else
+            cp "../target/$TARGET/release/mkext2" "$name/"
+            tar -czf "$name.tar.gz" "$name"
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cli-${{ matrix.target }}
+          path: |
+            cli/*.tar.gz
+            cli/*.zip
+          if-no-files-found: error
+
   release:
-    needs: [plan, build]
+    needs: [plan, build, build-cli]
     if: >-
       always()
       && github.event_name == 'push'
@@ -160,6 +243,7 @@ jobs:
       && needs.plan.result == 'success'
       && needs.plan.outputs.publish == 'true'
       && needs.build.result == 'success'
+      && needs.build-cli.result == 'success'
     runs-on: ubuntu-latest
     environment: release
     permissions:
@@ -179,6 +263,7 @@ jobs:
         if: needs.plan.outputs.publish == 'true'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
+          pattern: "*binding*"
           path: dist
       - name: Use the loader generated for this version
         if: needs.plan.outputs.publish == 'true'
@@ -212,3 +297,26 @@ jobs:
           INPUT_COMMAND: publish
           INPUT_CREATE_GITHUB_RELEASE: "true"
           INPUT_CARGO_TOKEN: ${{ steps.crates-io.outputs.token }}
+
+  # Kept out of the `release` job, which is the only one allowed OIDC tokens.
+  upload-cli:
+    needs: [plan, release]
+    if: always() && needs.release.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # release assets
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: cli-*
+          merge-multiple: true
+          path: cli
+      - name: Attach the CLI binaries to the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: cargo-mkext2-v${{ needs.plan.outputs.version }}
+        working-directory: cli
+        run: |
+          sha256sum mkext2-* > SHA256SUMS
+          cat SHA256SUMS
+          gh release upload "$TAG" mkext2-* SHA256SUMS --clobber -R "$GITHUB_REPOSITORY"

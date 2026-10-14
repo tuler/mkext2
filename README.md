@@ -27,7 +27,25 @@ mkext2 is a Rust implementation compatible with
 
 ## Installing the CLI
 
-mkext2 is installed with Cargo, Rust's package manager (Rust 1.85 or later, from
+Prebuilt binaries are attached to each
+[GitHub release](https://github.com/tuler/mkext2/releases) (the
+`cargo-mkext2-vX.Y.Z` ones), for Linux (x86_64, arm64), macOS (x86_64, arm64)
+and Windows (x86_64). They have no runtime dependencies: the Linux binaries are
+statically linked against musl, so they run on any distribution. Download the
+archive for your platform, check it against `SHA256SUMS`, and put `mkext2` on
+your `PATH` (replace `X.Y.Z` with the version):
+
+```bash
+v=X.Y.Z target=x86_64-unknown-linux-musl
+curl -fsSLO "https://github.com/tuler/mkext2/releases/download/cargo-mkext2-v$v/mkext2-$v-$target.tar.gz"
+tar -xzf "mkext2-$v-$target.tar.gz"
+sudo install "mkext2-$v-$target/mkext2" /usr/local/bin/
+```
+
+On macOS, a binary downloaded with a browser is quarantined; clear that with
+`xattr -d com.apple.quarantine mkext2`.
+
+mkext2 can also be installed with Cargo, Rust's package manager (Rust 1.85 or later, from
 [rustup.rs](https://rustup.rs)):
 
 ```bash
