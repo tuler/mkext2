@@ -9,7 +9,7 @@ ensured.
 
 - **Specification author.** Studied xgenext2fs, wrote an earlier port that is
   not part of this repository, and wrote the requirements
-  [`docs/SPEC.md`](docs/SPEC.md). The specification describes requirements and
+  [`docs/SPEC.md`](SPEC.md). The specification describes requirements and
   user-visible behavior (the command line interface, the content stored); it
   does not describe genext2fs' internal algorithms, and contains no genext2fs
   code or comments. Images do not need to match xgenext2fs' byte for byte.
@@ -41,7 +41,7 @@ ensured.
 Written independently of genext2fs (by the specification author) and kept: the
 storage devices, the read-ahead, the hasher, the error type, the image reader and
 checker, the host metadata helpers, the tar reader (which follows libarchive's
-behavior, see [NOTICE](NOTICE)), the Node.js binding, the tests, the examples, the
+behavior, see [NOTICE](../NOTICE)), the Node.js binding, the tests, the examples, the
 scripts, the CI and release workflows and the documentation.
 
 ## Log
@@ -94,3 +94,12 @@ scripts, the CI and release workflows and the documentation.
   ext2 with `filetype` cannot and Linux rejects them; the specification leaves
   them out. `crafted_tarballs` keeps its 300-byte member and now checks that
   mkext2 leaves it out with a valid image; a roundtrip test checks the warning.
+
+- 2026-10-14: the implementation was verified independently by the
+  specification author (all tests, a 300-case randomized comparison with
+  xgenext2fs, the benchmark, and a scan for genext2fs identifiers and for lines
+  shared with the earlier port, which found only interface definitions, ext2
+  field offsets and generic code). It was published as the repository's only
+  history. This record moved to `docs/`, and `CONTRIBUTING.md` now asks
+  contributors to keep genext2fs code out. The implementer session's transcript
+  is archived privately by the maintainer.

@@ -208,4 +208,7 @@ published from CI with OIDC trusted publishing; see [RELEASING.md](RELEASING.md)
 
 Apache-2.0. mkext2 contains no code from genext2fs: its engine was written in a
 clean room from a behavioral specification, and checked against xgenext2fs as a
-black box. See [CLEANROOM.md](CLEANROOM.md) and [NOTICE](NOTICE).
+black box. See [docs/CLEANROOM.md](docs/CLEANROOM.md) and [NOTICE](NOTICE).
+
+Contributions are welcome under the same license; please read
+[CONTRIBUTING.md](CONTRIBUTING.md) first.
