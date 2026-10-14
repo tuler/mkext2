@@ -17,6 +17,8 @@ pub(crate) struct Meta {
     pub gid: u32,
     pub size: u64,
     pub nlink: u64,
+    /// Device and inode number: the file's identity, for hard links.
+    pub dev: u64,
     pub ino: u64,
     pub ctime: i64,
     pub mtime: i64,
@@ -67,6 +69,7 @@ pub(crate) fn lstat(path: &Path) -> io::Result<Meta> {
         gid: m.gid(),
         size: m.size(),
         nlink: m.nlink(),
+        dev: m.dev(),
         ino: m.ino(),
         ctime: m.ctime(),
         mtime: m.mtime(),
@@ -109,6 +112,7 @@ pub(crate) fn lstat(path: &Path) -> io::Result<Meta> {
         gid: 0,
         size: m.len(),
         nlink: 1,
+        dev: 0,
         ino: 0,
         ctime: mtime,
         mtime,
@@ -163,4 +167,47 @@ pub(crate) fn read_link(path: &Path) -> io::Result<Vec<u8>> {
 
 pub(crate) fn open(path: &Path) -> io::Result<File> {
     File::open(path)
+}
+
+/// Whether this process may read a file with this metadata, judging by
+/// its owner and permission bits (opening every file twice would be
+/// slow).
+#[cfg(unix)]
+pub(crate) fn may_read(m: &Meta) -> bool {
+    // SAFETY: these calls have no preconditions.
+    let euid = unsafe { libc::geteuid() };
+    if euid == 0 {
+        return true;
+    }
+    if m.uid == euid {
+        return m.perm & 0o400 != 0;
+    }
+    if in_group(m.gid) {
+        return m.perm & 0o040 != 0;
+    }
+    m.perm & 0o004 != 0
+}
+
+#[cfg(unix)]
+fn in_group(gid: u32) -> bool {
+    use std::sync::OnceLock;
+    static GROUPS: OnceLock<Vec<u32>> = OnceLock::new();
+    let groups = GROUPS.get_or_init(|| {
+        // SAFETY: getgroups with a correctly sized buffer.
+        unsafe {
+            let n = libc::getgroups(0, std::ptr::null_mut());
+            let mut v = vec![0 as libc::gid_t; n.max(0) as usize];
+            let n = libc::getgroups(v.len() as libc::c_int, v.as_mut_ptr());
+            v.truncate(n.max(0) as usize);
+            let mut g: Vec<u32> = v;
+            g.push(libc::getegid());
+            g
+        }
+    });
+    groups.contains(&gid)
+}
+
+#[cfg(not(unix))]
+pub(crate) fn may_read(_m: &Meta) -> bool {
+    true
 }
