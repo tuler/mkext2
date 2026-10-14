@@ -14,8 +14,9 @@
 # runs no code from unpinned third-party actions.
 #
 # Publishing is disabled until the repository variable PUBLISH_ENABLED is
-# "true" (see RELEASING.md for the first, manual release). Running the
-# workflow manually (workflow_dispatch) only builds the native binaries.
+# "true" (see RELEASING.md for the first, manual release). Release PRs are
+# prepared independently of that switch. Running the workflow manually
+# (workflow_dispatch) only builds the native binaries.
 name: Release
 
 on:
@@ -39,6 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.plan.outputs.version }}
+      changesets: ${{ steps.plan.outputs.changesets }}
       publish: ${{ steps.plan.outputs.publish }}
       build: ${{ steps.plan.outputs.build }}
     steps:
@@ -46,21 +48,57 @@ jobs:
         with:
           persist-credentials: false
       - id: plan
+        env:
+          PUBLISH_ENABLED: ${{ vars.PUBLISH_ENABLED }}
         run: |
           version=$(node -p "require('./crates/mkext2-node/package.json').version")
+          changesets=false
+          if compgen -G '.sampo/changesets/*.md' >/dev/null; then changesets=true; fi
           publish=false
           # A release is due when no changesets are pending (the release PR
-          # was merged) and the version is not on npm yet.
-          if ! ls .sampo/changesets/*.md >/dev/null 2>&1 \
+          # was merged), publishing is enabled, and the version is not on npm.
+          if [ "$GITHUB_EVENT_NAME" = "push" ] \
+            && [ "$PUBLISH_ENABLED" = "true" ] \
+            && [ "$changesets" = "false" ] \
             && [ -z "$(npm view "@tuler/mkext2@${version}" version 2>/dev/null || true)" ]; then
             publish=true
           fi
           build=$publish
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then build=true; fi
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then build=true; fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "changesets=${changesets}" >> "$GITHUB_OUTPUT"
           echo "publish=${publish}" >> "$GITHUB_OUTPUT"
           echo "build=${build}" >> "$GITHUB_OUTPUT"
-          echo "version ${version}: publish=${publish} build=${build}"
+          echo "version ${version}: changesets=${changesets} publish=${publish} build=${build}"
+
+  prepare-release:
+    needs: plan
+    if: github.event_name == 'push' && needs.plan.outputs.changesets == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # release PR branch
+      pull-requests: write # create or update the release PR
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Cache Sampo
+        id: cache-sampo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/sampo-github-action
+          key: sampo-github-action-${{ env.SAMPO_GITHUB_ACTION }}-${{ runner.os }}-${{ runner.arch }}
+      - name: Install Sampo
+        if: steps.cache-sampo.outputs.cache-hit != 'true'
+        run: cargo install sampo-github-action --version "$SAMPO_GITHUB_ACTION" --locked
+      - name: Create or update the release PR
+        run: sampo-github-action
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_COMMAND: auto
 
   build:
     needs: plan
@@ -120,12 +158,12 @@ jobs:
       && github.event_name == 'push'
       && vars.PUBLISH_ENABLED == 'true'
       && needs.plan.result == 'success'
-      && (needs.build.result == 'success' || needs.build.result == 'skipped')
+      && needs.plan.outputs.publish == 'true'
+      && needs.build.result == 'success'
     runs-on: ubuntu-latest
     environment: release
     permissions:
-      contents: write # tags, GitHub releases, release PR branch
-      pull-requests: write # release PR
+      contents: write # tags and GitHub releases
       id-token: write # OIDC trusted publishing (crates.io, npm)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -166,11 +204,11 @@ jobs:
         run: cargo install sampo-github-action --version "$SAMPO_GITHUB_ACTION" --locked
 
       # Same as the bruits/sampo action, minus its unpinned installer.
-      - name: Release PR or publish
+      - name: Publish packages and create releases
         id: sampo
         run: sampo-github-action
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          INPUT_COMMAND: auto
+          INPUT_COMMAND: publish
           INPUT_CREATE_GITHUB_RELEASE: "true"
           INPUT_CARGO_TOKEN: ${{ steps.crates-io.outputs.token }}

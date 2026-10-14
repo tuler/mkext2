@@ -46,6 +46,20 @@ Pull requests opened with the workflow token don't trigger other workflows, so
 CI doesn't run on the release PR by itself. Close and reopen it (or push to it)
 if you want CI there.
 
+Release PR preparation runs whenever a push to `main` contains pending
+changesets, even while publishing is disabled. Native builds are skipped
+on that push; they run after the version PR is merged and publishing is
+enabled. A manual run builds the native binaries without creating a PR or
+publishing.
+
+In **Settings → Actions → General → Workflow permissions**, enable
+**Allow GitHub Actions to create and approve pull requests** so Sampo can
+create the version PR with `GITHUB_TOKEN`. The default workflow permissions
+can stay read-only: the PR job requests `contents: write` and
+`pull-requests: write` explicitly. See
+[Sampo's action setup](https://github.com/bruits/sampo/blob/main/crates/sampo-github-action/README.md)
+and [GitHub's PR permission setting](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository#preventing-github-actions-from-creating-or-approving-pull-requests).
+
 ## How publishing stays safe
 
 - **No long-lived tokens.** crates.io and npm use OIDC
