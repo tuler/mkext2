@@ -411,7 +411,7 @@ fn scan(
     fs: Option<&mut Fs<'_>>,
     policy: Policy,
     bs: u32,
-) -> Result<Vec<(PathBuf, u64)>> {
+) -> Result<Vec<(Arc<Path>, u64)>> {
     let mut sc = Scanner::new(tree, log, fs, policy, bs, options.allow_holes);
     for (i, layer) in layers.iter().enumerate() {
         let target = sc.target(layer.target.as_deref())?;
@@ -489,7 +489,7 @@ fn write(
     mut tree: Tree,
     log: &mut Log,
     fs: &mut Fs<'_>,
-    prefetch: Vec<(PathBuf, u64)>,
+    prefetch: Vec<(Arc<Path>, u64)>,
     lost_found: bool,
     timer: &mut Timer,
 ) -> Result<Report> {
@@ -543,11 +543,12 @@ fn write(
         tree.nodes[id].ino = fs.alloc_inode(dir)?;
     }
 
+    // more readers than this mostly wait on each other opening files
     let threads = options.threads.unwrap_or_else(|| {
         std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(1)
-            .min(8)
+            .min(4)
     });
     let prefetcher = if threads > 1 {
         Prefetcher::start(prefetch, threads)
@@ -557,6 +558,9 @@ fn write(
     let mut tar: Option<TarState> = None;
     let mut block_lists: FxHashMap<NodeId, (u64, Vec<u32>)> = FxHashMap::default();
     let mut large_file = false;
+    // one inode each: sized once instead of growing (and copying) by halves
+    let new_nodes = order.iter().filter(|&&id| !tree.nodes[id].existing).count();
+    fs.table.reserve(new_nodes);
 
     for &id in &order {
         if tree.nodes[id].existing {
@@ -587,17 +591,18 @@ fn write(
                     DataSrc::Empty => {
                         fs.write_data(&lay, size, &mut BytesSource { data: &[], pos: 0 })?;
                     }
-                    DataSrc::Path(p) => {
+                    DataSrc::Path { path: p, prefetch } => {
                         let name = p.as_os_str().as_encoded_bytes();
                         let head = prefetcher
                             .as_ref()
-                            .filter(|pf| pf.has(p))
-                            .and_then(|pf| pf.take(p));
+                            .and_then(|pf| Some((pf, pf.take(*prefetch)?)));
                         match head {
-                            Some(Ok(head)) => {
+                            Some((prefetcher, Ok(head))) => {
                                 let mut src = PrefetchedSource {
-                                    head,
+                                    prefetcher,
+                                    head: Some(head),
                                     pos: 0,
+                                    done: 0,
                                     path: p,
                                     limit: size,
                                     rest: None,
@@ -605,7 +610,7 @@ fn write(
                                 };
                                 fs.write_data(&lay, size, &mut src)?;
                             }
-                            Some(Err(e)) => {
+                            Some((_, Err(e))) => {
                                 return Err(Error::io(format!("reading {}", p.display()), e));
                             }
                             None => {

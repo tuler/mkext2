@@ -839,7 +839,8 @@ impl<'d> Fs<'d> {
         let chunk = (src.chunk_size(bs).max(bs) / bs) * bs;
         let mut buf = std::mem::take(&mut self.buf);
         if buf.len() < chunk {
-            buf.resize(chunk, 0);
+            // zeroed memory is mapped lazily: only the bytes used count
+            buf = vec![0; chunk];
         }
         let mut pos = 0u64; // bytes consumed from the source
         let mut pblock = vec![0u8; bs];
@@ -874,10 +875,19 @@ impl<'d> Fs<'d> {
                             let mut done = 0usize;
                             while done < span {
                                 let n = (span - done).min(chunk);
+                                let at = off + done as u64;
+                                // read straight into the device's buffers
+                                if let Some(dst) = self.dev.write_space(at, n)? {
+                                    let want = bytes.saturating_sub(done).min(dst.len());
+                                    let got = fill_from(src, &mut dst[..want])?;
+                                    dst[got..].fill(0);
+                                    done += dst.len();
+                                    continue;
+                                }
                                 let want = bytes.saturating_sub(done).min(n);
                                 let got = fill_from(src, &mut buf[..want])?;
                                 buf[got..n].fill(0);
-                                self.dev.write_at(off + done as u64, &buf[..n])?;
+                                self.dev.write_at(at, &buf[..n])?;
                                 done += n;
                             }
                         }

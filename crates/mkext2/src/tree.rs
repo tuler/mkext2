@@ -1,7 +1,8 @@
 //! The filesystem content as it is assembled from the layers, before
 //! anything is written: nodes (inodes to be) and directory entries.
 
-use std::path::PathBuf;
+use std::path::Path;
+use std::sync::Arc;
 
 use crate::error::Result;
 use crate::fs::Fs;
@@ -15,7 +16,11 @@ pub(crate) const ROOT: NodeId = 0;
 /// Where a regular file's data comes from.
 pub(crate) enum DataSrc {
     Empty,
-    Path(PathBuf),
+    /// A host file, read ahead as file `prefetch` of the read-ahead list.
+    Path {
+        path: Arc<Path>,
+        prefetch: usize,
+    },
     /// Member `member` (counting from 0) of the archive of layer `layer`.
     Tar {
         layer: usize,

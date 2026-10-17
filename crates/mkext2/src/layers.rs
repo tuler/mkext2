@@ -156,8 +156,9 @@ pub(crate) struct Scanner<'a, 'd> {
     pub policy: Policy,
     pub bs: u32,
     pub holes: bool,
-    /// Regular files of directory layers, in the order they are written.
-    pub prefetch: Vec<(PathBuf, u64)>,
+    /// Non-empty regular files of directory layers, in the order they are
+    /// written.
+    pub prefetch: Vec<(Arc<Path>, u64)>,
     hardlinks: FxHashMap<(u64, u64), NodeId>,
 }
 
@@ -293,14 +294,19 @@ impl<'a, 'd> Scanner<'a, 'd> {
                     } else {
                         None
                     };
-                    self.prefetch.push((path.clone(), meta.size));
+                    let src = if meta.size > 0 {
+                        let path: Arc<Path> = path.into();
+                        self.prefetch.push((path.clone(), meta.size));
+                        DataSrc::Path {
+                            path,
+                            prefetch: self.prefetch.len() - 1,
+                        }
+                    } else {
+                        DataSrc::Empty
+                    };
                     let body = Body::File(Box::new(FileData {
                         size: meta.size,
-                        src: if meta.size > 0 {
-                            DataSrc::Path(path)
-                        } else {
-                            DataSrc::Empty
-                        },
+                        src,
                         present,
                     }));
                     self.tree.create(dir, &name, S_IFREG, m, body)
