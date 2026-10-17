@@ -22,45 +22,65 @@ pub trait Device {
     fn as_mut_slice(&mut self) -> Option<&mut [u8]> {
         None
     }
+    /// Room to write up to `len` bytes at `offset` in place, when the device
+    /// buffers writes. The caller fills every byte of the slice returned (at
+    /// least one, at most `len`), which is then written as by `write_at`.
+    fn write_space(&mut self, offset: u64, len: usize) -> io::Result<Option<&mut [u8]>> {
+        let _ = (offset, len);
+        Ok(None)
+    }
 }
 
 /// An image backed by a file, written with positioned I/O.
 ///
-/// Writes are combined: the image is filled in several sequential streams
-/// at once (one per block group in use), so each stream is accumulated
-/// into a run and written in large pieces by a background thread.
+/// Writes are combined into runs of consecutive bytes and written in large
+/// pieces by a background thread. Runs live in a fixed pool of buffers that
+/// the writer hands back after each write, so the memory used stays within
+/// [`POOL`] buffers of [`BUF`] bytes however large the image is, and is
+/// allocated once instead of for every write.
 pub struct FileDevice {
     file: Arc<File>,
     runs: Vec<Run>,
-    pending: usize,
+    /// Buffers ready for a new run.
+    free: Vec<Vec<u8>>,
+    /// Buffers allocated so far, at most [`POOL`].
+    allocated: usize,
     writer: Option<Writer>,
 }
 
 struct Run {
     offset: u64,
+    /// A buffer of [`BUF`] bytes, the first `used` of them pending.
     data: Vec<u8>,
+    used: usize,
+}
+
+impl Run {
+    fn end(&self) -> u64 {
+        self.offset + self.used as u64
+    }
 }
 
 struct Writer {
     tx: Option<mpsc::SyncSender<Run>>,
+    /// Buffers coming back from the writer.
+    back: mpsc::Receiver<Vec<u8>>,
     handle: Option<std::thread::JoinHandle<io::Result<()>>>,
 }
 
-/// Size at which a run is written out.
-const RUN_LIMIT: usize = 8 << 20;
-/// Total buffered bytes before the largest run is written out.
-const PENDING_LIMIT: usize = 64 << 20;
-/// Bound searches over small, disjoint runs as well as their total bytes.
-const RUN_COUNT_LIMIT: usize = 64;
-/// Runs queued for the writer thread.
-const QUEUE: usize = 4;
+/// Size of a buffer, the largest single write.
+const BUF: usize = 8 << 20;
+/// Buffers in the pool: the bytes waiting to be written stay within
+/// `POOL * BUF`.
+const POOL: usize = 4;
 
 impl FileDevice {
     pub fn new(file: File) -> Self {
         FileDevice {
             file: Arc::new(file),
             runs: Vec::new(),
-            pending: 0,
+            free: Vec::new(),
+            allocated: 0,
             writer: None,
         }
     }
@@ -71,22 +91,29 @@ impl FileDevice {
         self.file.try_clone()
     }
 
-    fn submit(&mut self, run: Run) -> io::Result<()> {
-        if self.writer.is_none() {
-            let (tx, rx) = mpsc::sync_channel::<Run>(QUEUE);
+    fn writer(&mut self) -> &mut Writer {
+        self.writer.get_or_insert_with(|| {
+            // room for every buffer: sending never blocks
+            let (tx, rx) = mpsc::sync_channel::<Run>(POOL);
+            let (back_tx, back) = mpsc::sync_channel::<Vec<u8>>(POOL);
             let file = self.file.clone();
             let handle = std::thread::spawn(move || -> io::Result<()> {
                 for run in rx {
-                    pwrite_full(&file, run.offset, &run.data)?;
+                    pwrite_full(&file, run.offset, &run.data[..run.used])?;
+                    let _ = back_tx.send(run.data);
                 }
                 Ok(())
             });
-            self.writer = Some(Writer {
+            Writer {
                 tx: Some(tx),
+                back,
                 handle: Some(handle),
-            });
-        }
-        let w = self.writer.as_mut().unwrap();
+            }
+        })
+    }
+
+    fn submit(&mut self, run: Run) -> io::Result<()> {
+        let w = self.writer();
         if w.tx.as_ref().unwrap().send(run).is_err() {
             // the writer stopped on an error: report it
             return self.join_writer();
@@ -95,21 +122,88 @@ impl FileDevice {
     }
 
     fn join_writer(&mut self) -> io::Result<()> {
-        if let Some(mut w) = self.writer.take() {
-            drop(w.tx.take());
-            if let Some(h) = w.handle.take() {
-                return h
-                    .join()
-                    .unwrap_or_else(|_| Err(io::Error::other("writer thread panicked")));
-            }
-        }
-        Ok(())
+        let Some(mut w) = self.writer.take() else {
+            return Ok(());
+        };
+        drop(w.tx.take());
+        let result = match w.handle.take() {
+            Some(h) => h
+                .join()
+                .unwrap_or_else(|_| Err(io::Error::other("writer thread panicked"))),
+            None => Ok(()),
+        };
+        self.free.extend(w.back.try_iter());
+        // buffers lost with a failed write are allocated again if needed
+        self.allocated = self.free.len() + self.runs.len();
+        result
     }
 
     fn flush_run(&mut self, i: usize) -> io::Result<()> {
         let run = self.runs.swap_remove(i);
-        self.pending -= run.data.len();
         self.submit(run)
+    }
+
+    /// A buffer for a new run: a free one, a new one while the pool is not
+    /// full, or one the writer hands back after writing out the largest
+    /// pending run.
+    fn take_buffer(&mut self) -> io::Result<Vec<u8>> {
+        if let Some(w) = &self.writer {
+            self.free.extend(w.back.try_iter());
+        }
+        if let Some(b) = self.free.pop() {
+            return Ok(b);
+        }
+        if self.allocated < POOL {
+            self.allocated += 1;
+            // zeroed memory is mapped lazily, as it is first used
+            return Ok(vec![0; BUF]);
+        }
+        if let Some(largest) = (0..self.runs.len()).max_by_key(|&i| self.runs[i].used) {
+            self.flush_run(largest)?;
+        }
+        // every buffer is with the writer now: wait for one
+        match self.writer().back.recv() {
+            Ok(b) => Ok(b),
+            // the writer stopped on an error: report it
+            Err(_) => {
+                self.join_writer()?;
+                Err(io::Error::other("writer thread stopped"))
+            }
+        }
+    }
+
+    /// Room for up to `len` (> 0) bytes at `offset`, at the end of a run.
+    fn space(&mut self, offset: u64, len: usize) -> io::Result<&mut [u8]> {
+        let end = offset
+            .checked_add(len as u64)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "write offset overflow"))?;
+        // Write out full runs, and every older overlapping run before
+        // queuing this write. An append can extend across another pending
+        // run too.
+        while let Some(i) = self
+            .runs
+            .iter()
+            .position(|r| r.used == BUF || (r.offset < end && offset < r.end()))
+        {
+            self.flush_run(i)?;
+        }
+        // extend a run ending exactly here, or start one
+        let i = match self.runs.iter().position(|r| r.end() == offset) {
+            Some(i) => i,
+            None => {
+                let data = self.take_buffer()?;
+                self.runs.push(Run {
+                    offset,
+                    data,
+                    used: 0,
+                });
+                self.runs.len() - 1
+            }
+        };
+        let run = &mut self.runs[i];
+        let n = (BUF - run.used).min(len);
+        run.used += n;
+        Ok(&mut run.data[run.used - n..run.used])
     }
 
     /// Write all pending runs and wait until they are on the file.
@@ -196,53 +290,22 @@ impl Device for FileDevice {
         pread_full(&self.file, offset, buf)
     }
 
-    fn write_at(&mut self, offset: u64, buf: &[u8]) -> io::Result<()> {
-        if buf.is_empty() {
-            return Ok(());
-        }
-        let end = offset
-            .checked_add(buf.len() as u64)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "write offset overflow"))?;
-        // Flush every older overlapping run before merging or queuing this
-        // write. An append can extend across another pending run too.
-        while let Some(i) = self
-            .runs
-            .iter()
-            .position(|r| r.offset < end && offset < r.offset + r.data.len() as u64)
-        {
-            self.flush_run(i)?;
-        }
-        // extend a run ending exactly here
-        if let Some(i) = self
-            .runs
-            .iter()
-            .position(|r| r.offset + r.data.len() as u64 == offset)
-        {
-            let run = &mut self.runs[i];
-            run.data.extend_from_slice(buf);
-            self.pending += buf.len();
-            if run.data.len() >= RUN_LIMIT {
-                self.flush_run(i)?;
-            }
-        } else {
-            if buf.len() >= RUN_LIMIT {
-                return self.submit(Run {
-                    offset,
-                    data: buf.to_vec(),
-                });
-            }
-            let mut data = Vec::with_capacity(RUN_LIMIT.min(buf.len() * 4).max(buf.len()));
-            data.extend_from_slice(buf);
-            self.pending += buf.len();
-            self.runs.push(Run { offset, data });
-        }
-        while self.pending > PENDING_LIMIT || self.runs.len() > RUN_COUNT_LIMIT {
-            let largest = (0..self.runs.len())
-                .max_by_key(|&i| self.runs[i].data.len())
-                .unwrap();
-            self.flush_run(largest)?;
+    fn write_at(&mut self, mut offset: u64, mut buf: &[u8]) -> io::Result<()> {
+        while !buf.is_empty() {
+            let dst = self.space(offset, buf.len())?;
+            let n = dst.len();
+            dst.copy_from_slice(&buf[..n]);
+            offset += n as u64;
+            buf = &buf[n..];
         }
         Ok(())
+    }
+
+    fn write_space(&mut self, offset: u64, len: usize) -> io::Result<Option<&mut [u8]>> {
+        if len == 0 {
+            return Ok(None);
+        }
+        self.space(offset, len).map(Some)
     }
 
     fn set_len(&mut self, len: u64) -> io::Result<()> {
@@ -353,6 +416,9 @@ impl<D: Device + ?Sized> Device for Box<D> {
     fn as_mut_slice(&mut self) -> Option<&mut [u8]> {
         (**self).as_mut_slice()
     }
+    fn write_space(&mut self, offset: u64, len: usize) -> io::Result<Option<&mut [u8]>> {
+        (**self).write_space(offset, len)
+    }
 }
 
 #[cfg(test)]
@@ -378,6 +444,32 @@ mod tests {
         assert_eq!(file.size().unwrap(), 14);
         file.set_len(2).unwrap();
         assert_eq!(file.size().unwrap(), 2);
+    }
+
+    #[test]
+    fn writes_larger_than_the_pool_match_memory() {
+        let mut file = FileDevice::new(tempfile::tempfile().unwrap());
+        let mut memory = MemDevice::new();
+        let big: Vec<u8> = (0..BUF * POOL + BUF / 2 + 3)
+            .map(|i| (i % 251) as u8)
+            .collect();
+        file.write_at(5, &big).unwrap();
+        memory.write_at(5, &big).unwrap();
+        // in place, across buffers, then over part of the big write
+        let mut at = 7 + big.len() as u64;
+        let mut left = BUF + 9;
+        while left > 0 {
+            let dst = file.write_space(at, left).unwrap().unwrap();
+            dst.fill(0xa5);
+            memory.write_at(at, &vec![0xa5; dst.len()]).unwrap();
+            at += dst.len() as u64;
+            left -= dst.len();
+        }
+        file.write_at(BUF as u64 - 2, b"overlap").unwrap();
+        memory.write_at(BUF as u64 - 2, b"overlap").unwrap();
+        let mut actual = vec![0; memory.as_slice().len()];
+        file.read_at(0, &mut actual).unwrap();
+        assert!(actual == memory.as_slice());
     }
 
     #[test]

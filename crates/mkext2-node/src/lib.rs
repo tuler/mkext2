@@ -67,7 +67,7 @@ pub struct BuildOptions {
     pub block_map_dir: Option<String>,
     /// Content layers, applied in order.
     pub layers: Option<Vec<LayerSpec>>,
-    /// Read-ahead threads (default: up to 8; 0 or 1 disables).
+    /// Read-ahead threads (default: up to 4; 0 or 1 disables).
     pub threads: Option<u32>,
 }
 

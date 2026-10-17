@@ -60,7 +60,7 @@ export interface BuildOptions {
   blockMapDir?: string
   /** Content layers, applied in order. */
   layers?: Array<LayerSpec>
-  /** Read-ahead threads (default: up to 8; 0 or 1 disables). */
+  /** Read-ahead threads (default: up to 4; 0 or 1 disables). */
   threads?: number
 }
 
