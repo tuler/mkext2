@@ -42,6 +42,31 @@ published() { # name version
   [ -n "$(npm view "$1@$2" version 2>/dev/null || true)" ]
 }
 
+# A newly published version can take a minute or more to appear in the
+# registry's metadata. The release workflow's next step (Sampo's publish
+# plan) skips a package only if it sees the version, so wait until every
+# package published here shows it, in both the full metadata (`npm view`) and
+# the abbreviated metadata that installers read.
+visible() { # name version
+  npm view "$1@$2" version --prefer-online 2>/dev/null | grep -qxF "$2" || return 1
+  curl -fsS -H 'Accept: application/vnd.npm.install-v1+json' -H 'Cache-Control: no-cache' \
+    "https://registry.npmjs.org/${1/\//%2f}" 2>/dev/null |
+    node -e "let s = ''; process.stdin.on('data', (d) => (s += d)).on('end', () => process.exit(JSON.parse(s).versions?.[process.argv[1]] ? 0 : 1))" "$2"
+}
+
+wait_visible() { # name version
+  local deadline=$((SECONDS + ${NPM_VISIBLE_TIMEOUT:-600}))
+  until visible "$1" "$2"; do
+    if [ $SECONDS -ge $deadline ]; then
+      echo "error: $1@$2 was published but is still not visible on npm" >&2
+      return 1
+    fi
+    sleep 10
+  done
+  echo "visible on npm: $1@$2"
+}
+just_published=()
+
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
@@ -75,6 +100,7 @@ for dir in "$pkg"/npm/*/; do
   cp "$(find_artifact "$file")" "$out/$file"
   echo "publishing $name@$version"
   (cd "$out" && npm publish ${dry_run[@]+"${dry_run[@]}"})
+  just_published+=("$name")
 done
 
 if $with_main; then
@@ -92,7 +118,14 @@ if $with_main; then
     done
     echo "publishing $name@$version"
     (cd "$out" && npm publish ${dry_run[@]+"${dry_run[@]}"})
+    just_published+=("$name")
   fi
+fi
+
+if [ ${#dry_run[@]} -eq 0 ]; then
+  for name in ${just_published[@]+"${just_published[@]}"}; do
+    wait_visible "$name" "$version"
+  done
 fi
 
 echo "npm publish step done (version $version)"
