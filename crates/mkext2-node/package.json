@@ -1,6 +1,6 @@
 {
   "name": "@tuler/mkext2",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Reproducible ext2 filesystem image generator (xgenext2fs compatible), as a native Node.js module",
   "license": "Apache-2.0",
   "repository": {
@@ -42,11 +42,11 @@
     "test": "node --test __test__/index.test.mjs"
   },
   "optionalDependencies": {
-    "@tuler/mkext2-darwin-x64": "0.1.1",
-    "@tuler/mkext2-darwin-arm64": "0.1.1",
-    "@tuler/mkext2-linux-x64-gnu": "0.1.1",
-    "@tuler/mkext2-linux-arm64-gnu": "0.1.1",
-    "@tuler/mkext2-win32-x64-msvc": "0.1.1"
+    "@tuler/mkext2-darwin-x64": "0.1.2",
+    "@tuler/mkext2-darwin-arm64": "0.1.2",
+    "@tuler/mkext2-linux-x64-gnu": "0.1.2",
+    "@tuler/mkext2-linux-arm64-gnu": "0.1.2",
+    "@tuler/mkext2-win32-x64-msvc": "0.1.2"
   },
   "publishConfig": {
     "access": "public"
